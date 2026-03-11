@@ -68,6 +68,48 @@ export interface DispatchPayload {
   sessionProfile: SessionProfile;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Clear Dispatcher — for removing profiles when sessions end
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The payload passed to `clearDispatcher` when a session ends or `clearDispatch()`
+ * is called. Use this to send `ClearChargingProfile` to the charger.
+ *
+ * @example Using with ocpp-ws-io (OCPP 1.6):
+ *   clearDispatcher: async ({ clientId, connectorId, transactionId }) => {
+ *     await server.safeSendToClient(clientId, 'ocpp1.6', 'ClearChargingProfile', {
+ *       connectorId,
+ *       chargingProfilePurpose: 'TxProfile',
+ *       stackLevel: 0,
+ *     });
+ *   }
+ *
+ * @example Using with ocpp-ws-io (OCPP 2.0.1):
+ *   clearDispatcher: async ({ clientId, connectorId }) => {
+ *     await server.safeSendToClient(clientId, 'ocpp2.0.1', 'ClearChargingProfile', {
+ *       chargingProfileCriteria: {
+ *         evseId: connectorId,
+ *         chargingProfilePurpose: 'TxProfile',
+ *         stackLevel: 0,
+ *       },
+ *     });
+ *   }
+ */
+export type ClearProfileDispatcher = (
+  payload: ClearDispatchPayload,
+) => Promise<void>;
+
+/** The full context passed to every clearDispatcher call. */
+export interface ClearDispatchPayload {
+  /** The charging station identity string. */
+  clientId: string;
+  /** Connector / EVSE ID the profile was targeting. */
+  connectorId: number;
+  /** The transactionId of the session that ended. */
+  transactionId: number | string;
+}
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +146,16 @@ export interface ChargingSession {
    * Set to `Infinity` if unknown — the engine caps by hardware limit instead.
    */
   maxEvAcceptancePowerKw?: number;
+
+  /**
+   * Minimum charging rate this session must receive.
+   * Some EVs and heat pumps fault if power drops below a threshold.
+   * The engine will never assign less than this value to this session.
+   * If the grid cannot accommodate this minimum for all sessions, the session
+   * still receives this value and headroom is reduced from others.
+   * @example 1.4  // 1.4 kW minimum (6A × 230V)
+   */
+  minChargeRateKw?: number;
 
   /**
    * Session priority. Higher number = higher priority.
@@ -153,6 +205,8 @@ export interface SessionProfile {
   allocatedW: number;
   /** Allocated amps per phase (allocatedW / phases / 230) */
   allocatedAmpsPerPhase: number;
+  /** Minimum charge rate in kW (from session.minChargeRateKw, or 0 if not set) */
+  minChargeRateKw: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +284,21 @@ export interface SmartChargingEngineConfig {
   dispatcher: ChargingProfileDispatcher;
 
   /**
+   * Optional clear dispatcher — called by `clearDispatch()` or `removeSession()`
+   * (when `autoClearOnRemove` is true) to send `ClearChargingProfile` to the charger.
+   *
+   * If not provided, `clearDispatch()` / `autoClearOnRemove` are no-ops.
+   */
+  clearDispatcher?: ClearProfileDispatcher;
+
+  /**
+   * If `true` AND `clearDispatcher` is provided, automatically calls
+   * `ClearChargingProfile` on the charger when `removeSession()` is called.
+   * @default false
+   */
+  autoClearOnRemove?: boolean;
+
+  /**
    * Enable verbose console debug logging.
    * @default false
    */
@@ -248,13 +317,18 @@ export interface SmartChargingEngineEvents {
   sessionRemoved: (session: ActiveSession) => void;
   /** Fired after `optimize()` completes — includes the calculated profiles. */
   optimized: (profiles: SessionProfile[]) => void;
-  /** Fired after `dispatch()` completes successfully for ALL sessions. */
+  /** Fired after `dispatch()` completes for ALL sessions. */
   dispatched: (profiles: SessionProfile[]) => void;
-  /**
-   * Fired when a single dispatcher call throws.
-   * The engine continues dispatching to other sessions.
-   */
+  /** Fired when a single dispatcher call throws. Engine continues to other sessions. */
   dispatchError: (error: DispatchErrorEvent) => void;
+  /** Fired after `clearDispatch()` completes for a session. */
+  cleared: (payload: ClearDispatchPayload) => void;
+  /** Fired when a clearDispatcher call throws. */
+  clearError: (payload: ClearDispatchPayload & { error: unknown }) => void;
+  /** Fired when `startAutoDispatch()` begins. */
+  autoDispatchStarted: (intervalMs: number) => void;
+  /** Fired when `stopAutoDispatch()` stops the interval. */
+  autoDispatchStopped: () => void;
   /** General engine errors (e.g., strategy threw an exception). */
   error: (error: Error) => void;
 }

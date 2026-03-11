@@ -341,3 +341,152 @@ describe("SmartChargingEngine — Runtime Config", () => {
     expect(() => engine.setGridLimit(-5)).toThrow(SmartChargingConfigError);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// minChargeRateKw
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("SmartChargingEngine — minChargeRateKw", () => {
+  it("allocates at least minChargeRateKw even if grid share would be lower", () => {
+    // 3 sessions on 10kW grid = 3.33kW each, but session 1 has minChargeRateKw: 5
+    const engine = makeEngine(10);
+    engine.addSession({ transactionId: 1, clientId: "CP-001", minChargeRateKw: 5 });
+    engine.addSession({ transactionId: 2, clientId: "CP-002" });
+    engine.addSession({ transactionId: 3, clientId: "CP-003" });
+    const profiles = engine.optimize();
+
+    const p1 = profiles.find((p) => p.clientId === "CP-001")!;
+    expect(p1.allocatedKw).toBeGreaterThanOrEqual(5);
+    expect(p1.minChargeRateKw).toBe(5);
+  });
+
+  it("passes minChargeRateKw: 0 when not set", () => {
+    const engine = makeEngine(100);
+    engine.addSession({ transactionId: 1, clientId: "CP-001" });
+    const [p] = engine.optimize();
+    expect(p!.minChargeRateKw).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// clearDispatch()
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("SmartChargingEngine — clearDispatch()", () => {
+  it("is a no-op and resolves when no clearDispatcher configured", async () => {
+    const engine = makeEngine(100);
+    engine.addSession({ transactionId: 1, clientId: "CP-001" });
+    // Should not throw
+    await expect(engine.clearDispatch()).resolves.toBeUndefined();
+  });
+
+  it("calls clearDispatcher for all sessions when no transactionId given", async () => {
+    const clearDispatcher = vi.fn().mockResolvedValue(undefined);
+    const engine = new SmartChargingEngine({
+      siteId: "TEST",
+      maxGridPowerKw: 100,
+      safetyMarginPct: 0,
+      dispatcher: makeDispatcher(),
+      clearDispatcher,
+    });
+    engine.addSession({ transactionId: 1, clientId: "CP-001" });
+    engine.addSession({ transactionId: 2, clientId: "CP-002" });
+
+    await engine.clearDispatch();
+    expect(clearDispatcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("calls clearDispatcher only for specified transactionId", async () => {
+    const clearDispatcher = vi.fn().mockResolvedValue(undefined);
+    const engine = new SmartChargingEngine({
+      siteId: "TEST",
+      maxGridPowerKw: 100,
+      safetyMarginPct: 0,
+      dispatcher: makeDispatcher(),
+      clearDispatcher,
+    });
+    engine.addSession({ transactionId: 1, clientId: "CP-001" });
+    engine.addSession({ transactionId: 2, clientId: "CP-002" });
+
+    await engine.clearDispatch(1);
+    expect(clearDispatcher).toHaveBeenCalledTimes(1);
+    expect(clearDispatcher.mock.calls[0]?.[0].transactionId).toBe(1);
+  });
+
+  it("emits 'cleared' event on success", async () => {
+    const clearDispatcher = vi.fn().mockResolvedValue(undefined);
+    const engine = new SmartChargingEngine({
+      siteId: "TEST",
+      maxGridPowerKw: 100,
+      safetyMarginPct: 0,
+      dispatcher: makeDispatcher(),
+      clearDispatcher,
+    });
+    engine.addSession({ transactionId: 1, clientId: "CP-001" });
+    const cleared = vi.fn();
+    engine.on("cleared", cleared);
+    await engine.clearDispatch();
+    expect(cleared).toHaveBeenCalledOnce();
+  });
+
+  it("autoClearOnRemove sends ClearChargingProfile when session is removed", async () => {
+    const clearDispatcher = vi.fn().mockResolvedValue(undefined);
+    const engine = new SmartChargingEngine({
+      siteId: "TEST",
+      maxGridPowerKw: 100,
+      safetyMarginPct: 0,
+      dispatcher: makeDispatcher(),
+      clearDispatcher,
+      autoClearOnRemove: true,
+    });
+    engine.addSession({ transactionId: 1, clientId: "CP-001" });
+    engine.removeSession(1);
+    // clearDispatcher is fire-and-forget so we wait a tick
+    await new Promise((r) => setTimeout(r, 10));
+    expect(clearDispatcher).toHaveBeenCalledOnce();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// startAutoDispatch / stopAutoDispatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("SmartChargingEngine — startAutoDispatch() / stopAutoDispatch()", () => {
+  it("throws SmartChargingConfigError if intervalMs < 1000", () => {
+    const engine = makeEngine(100);
+    expect(() => engine.startAutoDispatch(500)).toThrow(SmartChargingConfigError);
+  });
+
+  it("emits autoDispatchStarted event with intervalMs", () => {
+    const engine = makeEngine(100);
+    const listener = vi.fn();
+    engine.on("autoDispatchStarted", listener);
+    engine.startAutoDispatch(5000);
+    expect(listener).toHaveBeenCalledWith(5000);
+    engine.stopAutoDispatch();
+  });
+
+  it("emits autoDispatchStopped event when stopped", () => {
+    const engine = makeEngine(100);
+    const listener = vi.fn();
+    engine.on("autoDispatchStopped", listener);
+    engine.startAutoDispatch(5000);
+    engine.stopAutoDispatch();
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("stopAutoDispatch is a no-op when not running", () => {
+    const engine = makeEngine(100);
+    // Should not throw
+    expect(() => engine.stopAutoDispatch()).not.toThrow();
+  });
+
+  it("config.autoDispatchActive reflects timer state", () => {
+    const engine = makeEngine(100);
+    expect(engine.config.autoDispatchActive).toBe(false);
+    engine.startAutoDispatch(5000);
+    expect(engine.config.autoDispatchActive).toBe(true);
+    engine.stopAutoDispatch();
+    expect(engine.config.autoDispatchActive).toBe(false);
+  });
+});

@@ -8,6 +8,7 @@ import type {
   Strategy,
   StrategyFn,
   DispatchPayload,
+  ClearDispatchPayload,
 } from "./types.js";
 import {
   SmartChargingConfigError,
@@ -70,6 +71,15 @@ declare interface SmartChargingEngine {
  *       csChargingProfiles: buildOcpp16Profile(sessionProfile),
  *     });
  *   },
+ *   // optional: send ClearChargingProfile when sessions end
+ *   clearDispatcher: async ({ clientId, connectorId }) => {
+ *     await server.safeSendToClient(clientId, 'ocpp1.6', 'ClearChargingProfile', {
+ *       connectorId,
+ *       chargingProfilePurpose: 'TxProfile',
+ *       stackLevel: 0,
+ *     });
+ *   },
+ *   autoClearOnRemove: true,
  * });
  * ```
  */
@@ -82,7 +92,10 @@ class SmartChargingEngine extends EventEmitter {
   private strategyFn: StrategyFn;
   private readonly phases: 1 | 3;
   private readonly dispatcher: SmartChargingEngineConfig["dispatcher"];
+  private readonly clearDispatcher: SmartChargingEngineConfig["clearDispatcher"];
+  private readonly autoClearOnRemove: boolean;
   private readonly debug: boolean;
+  private autoDispatchTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Internal session map keyed by transactionId (as string) */
   private readonly sessions = new Map<string, ActiveSession>();
@@ -114,6 +127,8 @@ class SmartChargingEngine extends EventEmitter {
     this.phases = config.phases ?? 3;
     this.algorithm = config.algorithm ?? "EQUAL_SHARE";
     this.dispatcher = config.dispatcher;
+    this.clearDispatcher = config.clearDispatcher;
+    this.autoClearOnRemove = config.autoClearOnRemove ?? false;
     this.debug = config.debug ?? false;
 
     // ── Strategy ────────────────────────────────────────────────────────────
@@ -157,6 +172,9 @@ class SmartChargingEngine extends EventEmitter {
    * Remove a charging session — call this from `StopTransaction` (1.6) or
    * `TransactionEvent(Ended)` (2.0.1).
    *
+   * If `autoClearOnRemove: true` AND `clearDispatcher` is configured,
+   * automatically sends `ClearChargingProfile` to the charger (fire-and-forget).
+   *
    * @throws {SessionNotFoundError} if the transactionId is not registered.
    */
   removeSession(transactionId: number | string): ActiveSession {
@@ -170,6 +188,21 @@ class SmartChargingEngine extends EventEmitter {
     this.sessions.delete(key);
     this.log(`[${this.siteId}] Session removed: ${key}`);
     this.emit("sessionRemoved", session);
+
+    // Auto-clear profile from charger if configured
+    if (this.autoClearOnRemove && this.clearDispatcher) {
+      const clearPayload: ClearDispatchPayload = {
+        clientId: session.clientId,
+        connectorId: session.connectorId,
+        transactionId: session.transactionId,
+      };
+      this.clearDispatcher(clearPayload)
+        .then(() => this.emit("cleared", clearPayload))
+        .catch((err: unknown) =>
+          this.emit("clearError", { ...clearPayload, error: err }),
+        );
+    }
+
     return session;
   }
 
@@ -297,6 +330,91 @@ class SmartChargingEngine extends EventEmitter {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // ClearChargingProfile
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Explicitly send `ClearChargingProfile` to one or all active sessions.
+   *
+   * Requires `clearDispatcher` to be configured. If not set, this is a no-op.
+   * Each clear call is isolated — errors are emitted as `'clearError'` events.
+   *
+   * @param transactionId - Clears only that session. If omitted, clears ALL sessions.
+   */
+  async clearDispatch(transactionId?: number | string): Promise<void> {
+    if (!this.clearDispatcher) {
+      this.log(`[${this.siteId}] clearDispatch called but no clearDispatcher configured. Skipping.`);
+      return;
+    }
+
+    const targets: ActiveSession[] = transactionId
+      ? [this.sessions.get(String(transactionId))].filter(
+          (s): s is ActiveSession => s !== undefined,
+        )
+      : Array.from(this.sessions.values());
+
+    await Promise.allSettled(
+      targets.map(async (session) => {
+        const payload: ClearDispatchPayload = {
+          clientId: session.clientId,
+          connectorId: session.connectorId,
+          transactionId: session.transactionId,
+        };
+        try {
+          await this.clearDispatcher!(payload);
+          this.emit("cleared", payload);
+        } catch (err) {
+          this.log(`[${this.siteId}] clearDispatcher error for ${session.clientId}: ${err}`);
+          this.emit("clearError", { ...payload, error: err });
+        }
+      }),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Auto-dispatch
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Start automatic periodic dispatch.
+   * The engine will call `dispatch()` every `intervalMs` milliseconds.
+   * Stops any previously running interval before starting a new one.
+   *
+   * @param intervalMs - Dispatch interval in ms. Minimum 1000ms.
+   * @example engine.startAutoDispatch(60_000); // recalculate every 60 seconds
+   */
+  startAutoDispatch(intervalMs: number): void {
+    if (intervalMs < 1000) {
+      throw new SmartChargingConfigError(
+        `startAutoDispatch intervalMs must be >= 1000ms, got ${intervalMs}`,
+      );
+    }
+    this.stopAutoDispatch(); // cancel any existing
+    this.autoDispatchTimer = setInterval(() => {
+      if (this.sessions.size > 0) {
+        this.dispatch().catch((err: unknown) => {
+          this.emit("error", err instanceof Error ? err : new Error(String(err)));
+        });
+      }
+    }, intervalMs);
+    this.log(`[${this.siteId}] Auto-dispatch started every ${intervalMs}ms`);
+    this.emit("autoDispatchStarted", intervalMs);
+  }
+
+  /**
+   * Stop the automatic periodic dispatch interval.
+   * Safe to call even if auto-dispatch was never started.
+   */
+  stopAutoDispatch(): void {
+    if (this.autoDispatchTimer !== null) {
+      clearInterval(this.autoDispatchTimer);
+      this.autoDispatchTimer = null;
+      this.log(`[${this.siteId}] Auto-dispatch stopped`);
+      this.emit("autoDispatchStopped");
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Runtime configuration
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -349,6 +467,7 @@ class SmartChargingEngine extends EventEmitter {
     phases: 1 | 3;
     voltageV: number;
     effectiveGridLimitKw: number;
+    autoDispatchActive: boolean;
   } {
     return {
       siteId: this.siteId,
@@ -358,6 +477,7 @@ class SmartChargingEngine extends EventEmitter {
       phases: this.phases,
       voltageV: this.voltageV,
       effectiveGridLimitKw: this.gridLimitKw * (1 - this.safetyMarginPct / 100),
+      autoDispatchActive: this.autoDispatchTimer !== null,
     };
   }
 

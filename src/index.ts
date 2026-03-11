@@ -36,6 +36,9 @@ export type {
   ChargingProfileDispatcher,
   DispatchPayload,
   DispatchErrorEvent,
+  // Clear profile
+  ClearProfileDispatcher,
+  ClearDispatchPayload,
   // Calculation result (raw kW / W / A)
   SessionProfile,
   // Time-of-Use
@@ -45,4 +48,4 @@ export type {
 } from "./types.js";
 
 // OCPP version-specific ChargingProfile types & builders are in 'ocpp-smart-charge-engine/builders'
-// import { buildOcpp16Profile, buildOcpp201Profile } from 'ocpp-smart-charge-engine/builders'
+// import { buildOcpp16Profile, buildOcpp201Profile, buildOcpp21Profile } from 'ocpp-smart-charge-engine/builders'
