@@ -2,7 +2,7 @@
  * ocpp-smart-charge-engine — Public API
  *
  * Library-agnostic OCPP Smart Charging constraint solver.
- * Works with ocpp-ws-io, ocpp-rpc, raw WebSocket, or any OCPP implementation.
+ * Works with ocpp-ws-io, raw WebSocket, or any OCPP implementation.
  */
 
 // Core engine
@@ -23,9 +23,9 @@ export {
   StrategyError,
 } from "./errors.js";
 
-// All types for users who want to extend or type their dispatcher
+// Types — engine, session, dispatcher, and strategies
 export type {
-  // Core
+  // Engine
   SmartChargingEngineConfig,
   SmartChargingEngineEvents,
   Strategy,
@@ -36,14 +36,13 @@ export type {
   ChargingProfileDispatcher,
   DispatchPayload,
   DispatchErrorEvent,
-  // Result
+  // Calculation result (raw kW / W / A)
   SessionProfile,
-  // OCPP Profile shapes
-  OcppChargingProfile,
-  OcppChargingSchedule,
-  OcppChargingSchedulePeriod,
   // Time-of-Use
   TimeOfUseWindow,
   // Strategy internals (for custom strategies)
   StrategyFn,
 } from "./types.js";
+
+// OCPP version-specific ChargingProfile types & builders are in 'ocpp-smart-charge-engine/builders'
+// import { buildOcpp16Profile, buildOcpp201Profile } from 'ocpp-smart-charge-engine/builders'

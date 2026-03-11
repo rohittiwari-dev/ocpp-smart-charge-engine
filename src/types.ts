@@ -1,7 +1,7 @@
 /**
  * ocpp-smart-charge-engine — Public Types
  *
- * Library-agnostic. No imports from ocpp-ws-io, ocpp-rpc, ws, or any other OCPP library.
+ * Library-agnostic. No imports from ocpp-ws-io, ws, or any other OCPP library.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,47 +68,7 @@ export interface DispatchPayload {
   sessionProfile: SessionProfile;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OCPP ChargingProfile — compatible with OCPP 1.6 and 2.0.1
-// ─────────────────────────────────────────────────────────────────────────────
 
-/** The OCPP charging profile object sent inside SetChargingProfile. */
-export interface OcppChargingProfile {
-  chargingProfileId: number;
-  /** Optional transactionId that this profile is bound to. */
-  transactionId?: number | string;
-  stackLevel: number;
-  chargingProfilePurpose: "ChargePointMaxProfile" | "TxDefaultProfile" | "TxProfile";
-  chargingProfileKind: "Absolute" | "Recurring" | "Relative";
-  chargingSchedule: OcppChargingSchedule;
-  /** ISO 8601 string — when the profile may no longer be applied */
-  validTo?: string;
-  /** ISO 8601 string — when the profile may be applied */
-  validFrom?: string;
-}
-
-/** The schedule within a charging profile. */
-export interface OcppChargingSchedule {
-  /** How the limit figures are expressed */
-  chargingRateUnit: "W" | "A";
-  chargingSchedulePeriod: OcppChargingSchedulePeriod[];
-  /** Optional — when the schedule should end. ISO duration or seconds from start. */
-  duration?: number;
-  /** Optional — start of the absolute schedule. ISO 8601. */
-  startSchedule?: string;
-  /** Optional — minimum allowed charge rate. Useful for bidirectional (V2G). */
-  minChargingRate?: number;
-}
-
-/** A single time-slot entry within a ChargingSchedule. */
-export interface OcppChargingSchedulePeriod {
-  /** Offset in seconds from the start of the schedule. First entry is always 0. */
-  startPeriod: number;
-  /** The charging limit for this period in the `chargingRateUnit` (W or A). */
-  limit: number;
-  /** Phase count (1 or 3). Defaults to 3 if omitted. */
-  numberPhases?: 1 | 2 | 3;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Session — the engine's view of an active charging session

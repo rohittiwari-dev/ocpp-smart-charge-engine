@@ -1,7 +1,7 @@
 {
   "name": "ocpp-smart-charge-engine",
   "version": "0.1.0-alpha",
-  "description": "Library-agnostic OCPP smart charging constraint solver. Works with ocpp-ws-io, ocpp-rpc, raw WebSocket, or any OCPP implementation.",
+  "description": "Library-agnostic OCPP smart charging constraint solver. Works with ocpp-ws-io, raw WebSocket, or any OCPP implementation.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",

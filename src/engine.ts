@@ -52,7 +52,7 @@ declare interface SmartChargingEngine {
  * The engine calculates optimal charging profiles for connected EVs and
  * invokes a user-supplied `dispatcher` callback. The dispatcher is
  * responsible for actually sending the `SetChargingProfile` command via
- * whatever OCPP library you are using (ocpp-ws-io, ocpp-rpc, raw ws, etc).
+ * whatever OCPP library you are using (ocpp-ws-io, raw ws, etc).
  *
  * @example
  * ```typescript
