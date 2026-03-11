@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>ocpp-smart-charge-engine</strong>
+  <img src="https://raw.githubusercontent.com/rohittiwari-dev/ocpp-smart-charge-engine/main/assets/logo.png" alt="ocpp-smart-charge-engine" width="420" />
 </p>
 
 <p align="center">
@@ -47,13 +47,18 @@ import { buildOcpp16Profile } from "ocpp-smart-charge-engine/builders";
 const engine = new SmartChargingEngine({
   siteId: "SITE-HQ-001",
   maxGridPowerKw: 100, // 100kW grid connection
-  safetyMarginPct: 5,  // Use max 95kW, leave 5% buffer
+  safetyMarginPct: 5, // Use max 95kW, leave 5% buffer
   algorithm: Strategies.EQUAL_SHARE,
 
   // The ONLY integration point — use whatever OCPP library you have.
   // `sessionProfile` contains raw numbers (kW, W, A).
   // Use the builder helpers to convert to the correct OCPP version shape.
-  dispatcher: async ({ clientId, connectorId, transactionId, sessionProfile }) => {
+  dispatcher: async ({
+    clientId,
+    connectorId,
+    transactionId,
+    sessionProfile,
+  }) => {
     await server.safeSendToClient(clientId, "ocpp1.6", "SetChargingProfile", {
       connectorId,
       csChargingProfiles: buildOcpp16Profile(sessionProfile),
@@ -76,8 +81,8 @@ engine.addSession({
   transactionId: payload.transactionId,
   clientId: client.identity,
   connectorId: payload.connectorId,
-  maxHardwarePowerKw: 22,  // Charger max hardware rating
-  minChargeRateKw: 1.4,    // Minimum — prevents EV faulting on low power
+  maxHardwarePowerKw: 22, // Charger max hardware rating
+  minChargeRateKw: 1.4, // Minimum — prevents EV faulting on low power
 });
 
 // Recalculate and dispatch profiles to all active chargers
@@ -105,7 +110,12 @@ that's exactly why the engine doesn't build the profile itself.
 ```typescript
 import { buildOcpp16Profile } from "ocpp-smart-charge-engine/builders";
 
-dispatcher: async ({ clientId, connectorId, transactionId, sessionProfile }) => {
+dispatcher: async ({
+  clientId,
+  connectorId,
+  transactionId,
+  sessionProfile,
+}) => {
   await server.safeSendToClient(
     clientId,
     "ocpp1.6",
@@ -124,7 +134,12 @@ dispatcher: async ({ clientId, connectorId, transactionId, sessionProfile }) => 
 ```typescript
 import { buildOcpp201Profile } from "ocpp-smart-charge-engine/builders";
 
-dispatcher: async ({ clientId, connectorId, transactionId, sessionProfile }) => {
+dispatcher: async ({
+  clientId,
+  connectorId,
+  transactionId,
+  sessionProfile,
+}) => {
   await server.safeSendToClient(
     clientId,
     "ocpp2.0.1",
@@ -141,11 +156,19 @@ dispatcher: async ({ clientId, connectorId, transactionId, sessionProfile }) => 
 ### Mixed fleet (some 1.6, some 2.0.1)
 
 ```typescript
-import { buildOcpp16Profile, buildOcpp201Profile } from "ocpp-smart-charge-engine/builders";
+import {
+  buildOcpp16Profile,
+  buildOcpp201Profile,
+} from "ocpp-smart-charge-engine/builders";
 
 const protocolMap = new Map<string, "ocpp1.6" | "ocpp2.0.1">(); // populated on connect
 
-dispatcher: async ({ clientId, connectorId, transactionId, sessionProfile }) => {
+dispatcher: async ({
+  clientId,
+  connectorId,
+  transactionId,
+  sessionProfile,
+}) => {
   const protocol = protocolMap.get(clientId) ?? "ocpp1.6";
 
   if (protocol === "ocpp1.6") {
@@ -213,8 +236,8 @@ const engine = new SmartChargingEngine({
 ### Manual clear
 
 ```typescript
-await engine.clearDispatch();    // clear ALL active sessions
-await engine.clearDispatch(42);  // clear only transactionId 42
+await engine.clearDispatch(); // clear ALL active sessions
+await engine.clearDispatch(42); // clear only transactionId 42
 ```
 
 ---
@@ -301,7 +324,7 @@ engine.startAutoDispatch(60_000); // recalculate every minute
 
 Version-specific helpers to convert raw `SessionProfile` numbers into the correct OCPP `SetChargingProfile` payload.
 
-| Helper | OCPP Version | Field name in payload | `chargingSchedule` shape |
+| Helper                  | OCPP Version | Field name in payload | `chargingSchedule` shape |
 | ----------------------- | ------------ | --------------------- | ------------------------ |
 | `buildOcpp16Profile()`  | 1.6          | `csChargingProfiles`  | single object            |
 | `buildOcpp201Profile()` | 2.0.1        | `chargingProfile`     | **array**                |
@@ -314,14 +337,14 @@ Version-specific helpers to convert raw `SessionProfile` numbers into the correc
 ```typescript
 buildOcpp16Profile(sessionProfile, {
   stackLevel: 0,
-  purpose: "TxProfile",        // "TxProfile" | "TxDefaultProfile" | "ChargePointMaxProfile"
-  rateUnit: "W",               // "W" | "A"
+  purpose: "TxProfile", // "TxProfile" | "TxDefaultProfile" | "ChargePointMaxProfile"
+  rateUnit: "W", // "W" | "A"
   numberPhases: 3,
 
   // Multi-period schedule — overrides the calculated single-period
   periods: [
-    { startPeriod: 0,    limit: 22000, numberPhases: 3 }, // 22kW for first 2h
-    { startPeriod: 7200, limit: 7000,  numberPhases: 3 }, // 7kW after 2h
+    { startPeriod: 0, limit: 22000, numberPhases: 3 }, // 22kW for first 2h
+    { startPeriod: 7200, limit: 7000, numberPhases: 3 }, // 7kW after 2h
   ],
 });
 ```
@@ -347,66 +370,66 @@ dispatcher: async ({ clientId, connectorId, sessionProfile }) => {
 
 ### `new SmartChargingEngine(config)`
 
-| Option              | Type                        | Default       | Description                                      |
-| ------------------- | --------------------------- | ------------- | ------------------------------------------------ |
-| `siteId`            | `string`                    | required      | Human-readable site identifier                   |
-| `maxGridPowerKw`    | `number`                    | required      | Maximum site grid power in kW                    |
-| `dispatcher`        | `ChargingProfileDispatcher` | required      | Your OCPP send function                          |
-| `clearDispatcher`   | `ClearProfileDispatcher`    | —             | Optional: sends `ClearChargingProfile`           |
-| `autoClearOnRemove` | `boolean`                   | `false`       | Auto-clear profile on `removeSession()`          |
-| `algorithm`         | `Strategy`                  | `EQUAL_SHARE` | Allocation strategy                              |
-| `safetyMarginPct`   | `number`                    | `5`           | Power held in reserve (%)                        |
-| `phases`            | `1 \| 3`                    | `3`           | AC phase count for the site                      |
-| `voltageV`          | `number`                    | `230`         | Grid voltage for amps calculation                |
-| `timeOfUseWindows`  | `TimeOfUseWindow[]`         | `[]`          | Peak windows (TIME_OF_USE only)                  |
-| `debug`             | `boolean`                   | `false`       | Enable verbose console logging                   |
+| Option              | Type                        | Default       | Description                             |
+| ------------------- | --------------------------- | ------------- | --------------------------------------- |
+| `siteId`            | `string`                    | required      | Human-readable site identifier          |
+| `maxGridPowerKw`    | `number`                    | required      | Maximum site grid power in kW           |
+| `dispatcher`        | `ChargingProfileDispatcher` | required      | Your OCPP send function                 |
+| `clearDispatcher`   | `ClearProfileDispatcher`    | —             | Optional: sends `ClearChargingProfile`  |
+| `autoClearOnRemove` | `boolean`                   | `false`       | Auto-clear profile on `removeSession()` |
+| `algorithm`         | `Strategy`                  | `EQUAL_SHARE` | Allocation strategy                     |
+| `safetyMarginPct`   | `number`                    | `5`           | Power held in reserve (%)               |
+| `phases`            | `1 \| 3`                    | `3`           | AC phase count for the site             |
+| `voltageV`          | `number`                    | `230`         | Grid voltage for amps calculation       |
+| `timeOfUseWindows`  | `TimeOfUseWindow[]`         | `[]`          | Peak windows (TIME_OF_USE only)         |
+| `debug`             | `boolean`                   | `false`       | Enable verbose console logging          |
 
 ### `addSession(session)` options
 
-| Option                  | Type             | Default | Description                                        |
-| ----------------------- | ---------------- | ------- | -------------------------------------------------- |
-| `transactionId`         | `number\|string` | req.    | OCPP transaction ID                                |
-| `clientId`              | `string`         | req.    | Charging station identity                          |
-| `connectorId`           | `number`         | `1`     | Connector / EVSE ID                                |
-| `maxHardwarePowerKw`    | `number`         | `∞`     | Charger hardware limit (upper cap)                 |
-| `maxEvAcceptancePowerKw`| `number`         | `∞`     | EV acceptance limit (upper cap)                    |
-| `minChargeRateKw`       | `number`         | `0`     | Minimum power floor — prevents EV faults           |
-| `priority`              | `number`         | `1`     | Session priority (PRIORITY strategy only)          |
-| `phases`                | `1 \| 3`         | site    | Phase count for this connector                     |
-| `metadata`              | `object`         | —       | Arbitrary data (RFID, tariff ID, etc.) — stored, not used |
+| Option                   | Type             | Default | Description                                               |
+| ------------------------ | ---------------- | ------- | --------------------------------------------------------- |
+| `transactionId`          | `number\|string` | req.    | OCPP transaction ID                                       |
+| `clientId`               | `string`         | req.    | Charging station identity                                 |
+| `connectorId`            | `number`         | `1`     | Connector / EVSE ID                                       |
+| `maxHardwarePowerKw`     | `number`         | `∞`     | Charger hardware limit (upper cap)                        |
+| `maxEvAcceptancePowerKw` | `number`         | `∞`     | EV acceptance limit (upper cap)                           |
+| `minChargeRateKw`        | `number`         | `0`     | Minimum power floor — prevents EV faults                  |
+| `priority`               | `number`         | `1`     | Session priority (PRIORITY strategy only)                 |
+| `phases`                 | `1 \| 3`         | site    | Phase count for this connector                            |
+| `metadata`               | `object`         | —       | Arbitrary data (RFID, tariff ID, etc.) — stored, not used |
 
 ### Methods
 
-| Method                       | Description                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------- |
-| `addSession(session)`        | Register a session. Throws `DuplicateSessionError` if already exists                     |
-| `removeSession(txId)`        | Remove a session. Throws `SessionNotFoundError` if not found                             |
-| `safeRemoveSession(txId)`    | Remove without throwing — returns `undefined` if not found                               |
-| `optimize()`                 | Calculate profiles **without** dispatching. Returns `SessionProfile[]`                   |
-| `dispatch()`                 | Calculate profiles **and** call dispatcher for each. Returns `Promise<SessionProfile[]>` |
-| `clearDispatch(txId?)`       | Send `ClearChargingProfile` to one or all sessions. No-op if no `clearDispatcher`        |
-| `startAutoDispatch(ms)`      | Start periodic dispatch every `ms` milliseconds (min 1000ms)                             |
-| `stopAutoDispatch()`         | Stop the auto-dispatch interval                                                          |
-| `setGridLimit(kw)`           | Update grid limit at runtime                                                             |
-| `setAlgorithm(strategy)`     | Hot-swap algorithm at runtime                                                            |
-| `setSafetyMargin(pct)`       | Update safety margin at runtime                                                          |
-| `getSessions()`              | Read-only array of active sessions                                                       |
-| `isEmpty()`                  | Returns `true` when no sessions are registered                                           |
+| Method                    | Description                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------- |
+| `addSession(session)`     | Register a session. Throws `DuplicateSessionError` if already exists                     |
+| `removeSession(txId)`     | Remove a session. Throws `SessionNotFoundError` if not found                             |
+| `safeRemoveSession(txId)` | Remove without throwing — returns `undefined` if not found                               |
+| `optimize()`              | Calculate profiles **without** dispatching. Returns `SessionProfile[]`                   |
+| `dispatch()`              | Calculate profiles **and** call dispatcher for each. Returns `Promise<SessionProfile[]>` |
+| `clearDispatch(txId?)`    | Send `ClearChargingProfile` to one or all sessions. No-op if no `clearDispatcher`        |
+| `startAutoDispatch(ms)`   | Start periodic dispatch every `ms` milliseconds (min 1000ms)                             |
+| `stopAutoDispatch()`      | Stop the auto-dispatch interval                                                          |
+| `setGridLimit(kw)`        | Update grid limit at runtime                                                             |
+| `setAlgorithm(strategy)`  | Hot-swap algorithm at runtime                                                            |
+| `setSafetyMargin(pct)`    | Update safety margin at runtime                                                          |
+| `getSessions()`           | Read-only array of active sessions                                                       |
+| `isEmpty()`               | Returns `true` when no sessions are registered                                           |
 
 ### Events
 
-| Event                 | Payload              | Fired when                                   |
-| --------------------- | -------------------- | -------------------------------------------- |
-| `sessionAdded`        | `ActiveSession`      | A session is registered                      |
-| `sessionRemoved`      | `ActiveSession`      | A session is removed                         |
-| `optimized`           | `SessionProfile[]`   | After `optimize()` completes                 |
-| `dispatched`          | `SessionProfile[]`   | After all dispatcher calls settle            |
-| `dispatchError`       | `DispatchErrorEvent` | A dispatcher call throws; engine continues   |
-| `cleared`             | `ClearDispatchPayload` | After a `clearDispatcher` call succeeds    |
-| `clearError`          | `ClearDispatchPayload & { error }` | A `clearDispatcher` call throws  |
-| `autoDispatchStarted` | `number` (intervalMs)| After `startAutoDispatch()` is called        |
-| `autoDispatchStopped` | —                    | After `stopAutoDispatch()` is called         |
-| `error`               | `Error`              | A strategy function throws                   |
+| Event                 | Payload                            | Fired when                                 |
+| --------------------- | ---------------------------------- | ------------------------------------------ |
+| `sessionAdded`        | `ActiveSession`                    | A session is registered                    |
+| `sessionRemoved`      | `ActiveSession`                    | A session is removed                       |
+| `optimized`           | `SessionProfile[]`                 | After `optimize()` completes               |
+| `dispatched`          | `SessionProfile[]`                 | After all dispatcher calls settle          |
+| `dispatchError`       | `DispatchErrorEvent`               | A dispatcher call throws; engine continues |
+| `cleared`             | `ClearDispatchPayload`             | After a `clearDispatcher` call succeeds    |
+| `clearError`          | `ClearDispatchPayload & { error }` | A `clearDispatcher` call throws            |
+| `autoDispatchStarted` | `number` (intervalMs)              | After `startAutoDispatch()` is called      |
+| `autoDispatchStopped` | —                                  | After `stopAutoDispatch()` is called       |
+| `error`               | `Error`                            | A strategy function throws                 |
 
 ---
 
