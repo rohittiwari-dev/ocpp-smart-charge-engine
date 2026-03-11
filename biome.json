@@ -8,19 +8,20 @@
   "files": {
     "ignoreUnknown": true,
     "includes": [
-      "src/**",
-      "test/**",
-      "*.json",
-      "*.js",
-      "*.ts"
+      "apps/**",
+      "packages/**",
+      "package.json",
+      "turbo.json",
+      "biome.json",
+      "tsconfig.json",
+      "commitlint.config.js"
     ]
   },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2,
-    "lineWidth": 80,
-    "lineEnding": "lf"
+    "lineWidth": 80
   },
   "linter": {
     "enabled": true,
@@ -30,9 +31,7 @@
   },
   "javascript": {
     "formatter": {
-      "quoteStyle": "double",
-      "trailingCommas": "all",
-      "semicolons": "always"
+      "quoteStyle": "double"
     }
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } }
