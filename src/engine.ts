@@ -1,0 +1,400 @@
+import { EventEmitter } from "node:events";
+import type {
+  SmartChargingEngineConfig,
+  SmartChargingEngineEvents,
+  ChargingSession,
+  ActiveSession,
+  SessionProfile,
+  Strategy,
+  StrategyFn,
+  DispatchPayload,
+} from "./types.js";
+import {
+  SmartChargingConfigError,
+  DuplicateSessionError,
+  SessionNotFoundError,
+  StrategyError,
+} from "./errors.js";
+import { equalShareStrategy } from "./strategies/equal-share.js";
+import { priorityStrategy } from "./strategies/priority.js";
+import { createTimeOfUseStrategy } from "./strategies/time-of-use.js";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Typed EventEmitter shim
+// ─────────────────────────────────────────────────────────────────────────────
+
+declare interface SmartChargingEngine {
+  on<K extends keyof SmartChargingEngineEvents>(
+    event: K,
+    listener: SmartChargingEngineEvents[K],
+  ): this;
+  off<K extends keyof SmartChargingEngineEvents>(
+    event: K,
+    listener: SmartChargingEngineEvents[K],
+  ): this;
+  once<K extends keyof SmartChargingEngineEvents>(
+    event: K,
+    listener: SmartChargingEngineEvents[K],
+  ): this;
+  emit<K extends keyof SmartChargingEngineEvents>(
+    event: K,
+    ...args: Parameters<SmartChargingEngineEvents[K]>
+  ): boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SmartChargingEngine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Library-agnostic OCPP Smart Charging constraint solver.
+ *
+ * The engine calculates optimal charging profiles for connected EVs and
+ * invokes a user-supplied `dispatcher` callback. The dispatcher is
+ * responsible for actually sending the `SetChargingProfile` command via
+ * whatever OCPP library you are using (ocpp-ws-io, ocpp-rpc, raw ws, etc).
+ *
+ * @example
+ * ```typescript
+ * import { SmartChargingEngine, Strategies } from 'ocpp-smart-charge-engine';
+ * import { buildOcpp16Profile } from 'ocpp-smart-charge-engine/builders';
+ *
+ * const engine = new SmartChargingEngine({
+ *   siteId: 'SITE-001',
+ *   maxGridPowerKw: 100,
+ *   algorithm: Strategies.EQUAL_SHARE,
+ *   // dispatcher receives raw numbers — you pick the OCPP version
+ *   dispatcher: async ({ clientId, connectorId, sessionProfile }) => {
+ *     await server.safeSendToClient(clientId, 'ocpp1.6', 'SetChargingProfile', {
+ *       connectorId,
+ *       csChargingProfiles: buildOcpp16Profile(sessionProfile),
+ *     });
+ *   },
+ * });
+ * ```
+ */
+class SmartChargingEngine extends EventEmitter {
+  private readonly siteId: string;
+  private gridLimitKw: number;
+  private safetyMarginPct: number;
+  private readonly voltageV: number;
+  private algorithm: Strategy;
+  private strategyFn: StrategyFn;
+  private readonly phases: 1 | 3;
+  private readonly dispatcher: SmartChargingEngineConfig["dispatcher"];
+  private readonly debug: boolean;
+
+  /** Internal session map keyed by transactionId (as string) */
+  private readonly sessions = new Map<string, ActiveSession>();
+
+  /** Auto-incrementing profile ID counter */
+  private profileIdCounter = 1;
+
+  constructor(config: SmartChargingEngineConfig) {
+    super();
+
+    // ── Validation ─────────────────────────────────────────────────────────
+    if (config.maxGridPowerKw <= 0) {
+      throw new SmartChargingConfigError(
+        `maxGridPowerKw must be > 0, got ${config.maxGridPowerKw}`,
+      );
+    }
+    const safetyMarginPct = config.safetyMarginPct ?? 5;
+    if (safetyMarginPct < 0 || safetyMarginPct >= 100) {
+      throw new SmartChargingConfigError(
+        `safetyMarginPct must be between 0 and 99, got ${safetyMarginPct}`,
+      );
+    }
+
+    // ── Store config ────────────────────────────────────────────────────────
+    this.siteId = config.siteId;
+    this.gridLimitKw = config.maxGridPowerKw;
+    this.safetyMarginPct = safetyMarginPct;
+    this.voltageV = config.voltageV ?? 230;
+    this.phases = config.phases ?? 3;
+    this.algorithm = config.algorithm ?? "EQUAL_SHARE";
+    this.dispatcher = config.dispatcher;
+    this.debug = config.debug ?? false;
+
+    // ── Strategy ────────────────────────────────────────────────────────────
+    this.strategyFn = this.resolveStrategy(this.algorithm, config);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Session Management
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Register a new active charging session with the engine.
+   *
+   * Call this from your OCPP `StartTransaction` (1.6) or
+   * `TransactionEvent(Started)` (2.0.1) handler.
+   *
+   * @throws {DuplicateSessionError} if a session with the same transactionId is already registered.
+   */
+  addSession(session: ChargingSession): ActiveSession {
+    const key = String(session.transactionId);
+
+    if (this.sessions.has(key)) {
+      throw new DuplicateSessionError(session.transactionId);
+    }
+
+    const active: ActiveSession = {
+      ...session,
+      connectorId: session.connectorId ?? 1,
+      priority: session.priority ?? 1,
+      phases: session.phases ?? this.phases,
+      addedAt: Date.now(),
+    };
+
+    this.sessions.set(key, active);
+    this.log(`[${this.siteId}] Session added: ${key} (client: ${session.clientId})`);
+    this.emit("sessionAdded", active);
+    return active;
+  }
+
+  /**
+   * Remove a charging session — call this from `StopTransaction` (1.6) or
+   * `TransactionEvent(Ended)` (2.0.1).
+   *
+   * @throws {SessionNotFoundError} if the transactionId is not registered.
+   */
+  removeSession(transactionId: number | string): ActiveSession {
+    const key = String(transactionId);
+    const session = this.sessions.get(key);
+
+    if (!session) {
+      throw new SessionNotFoundError(transactionId);
+    }
+
+    this.sessions.delete(key);
+    this.log(`[${this.siteId}] Session removed: ${key}`);
+    this.emit("sessionRemoved", session);
+    return session;
+  }
+
+  /**
+   * A safe variant of `removeSession` — returns `undefined` instead of
+   * throwing when the session is not found. Useful in cleanup code where
+   * you don't want to deal with the exception.
+   */
+  safeRemoveSession(transactionId: number | string): ActiveSession | undefined {
+    try {
+      return this.removeSession(transactionId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Read-only snapshot of all currently active sessions.
+   */
+  getSessions(): ReadonlyArray<ActiveSession> {
+    return Array.from(this.sessions.values());
+  }
+
+  /**
+   * Returns `true` if there are no active sessions.
+   */
+  isEmpty(): boolean {
+    return this.sessions.size === 0;
+  }
+
+  /**
+   * Returns the number of active sessions.
+   */
+  get sessionCount(): number {
+    return this.sessions.size;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Optimization
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Run the current strategy algorithm and return the calculated profiles.
+   * Does NOT call the dispatcher — only calculates.
+   * Useful for inspecting the distribution before committing.
+   *
+   * Emits the `'optimized'` event with the resulting profiles.
+   */
+  optimize(): SessionProfile[] {
+    const sessions = Array.from(this.sessions.values());
+
+    if (sessions.length === 0) {
+      this.emit("optimized", []);
+      return [];
+    }
+
+    const effectiveGridLimitKw =
+      this.gridLimitKw * (1 - this.safetyMarginPct / 100);
+
+    let profiles: SessionProfile[];
+    try {
+      profiles = this.strategyFn(sessions, effectiveGridLimitKw);
+    } catch (err) {
+      const error = new StrategyError(
+        this.algorithm,
+        err instanceof Error ? err.message : String(err),
+      );
+      this.emit("error", error);
+      throw error;
+    }
+
+    this.log(
+      `[${this.siteId}] Optimized ${profiles.length} sessions. ` +
+        `Grid: ${this.gridLimitKw}kW, effective: ${effectiveGridLimitKw.toFixed(2)}kW`,
+    );
+
+    this.emit("optimized", profiles);
+    return profiles;
+  }
+
+  /**
+   * Calculate profiles AND invoke the dispatcher for each session.
+   *
+   * Each dispatcher call is isolated — if one throws (e.g., a charger
+   * doesn't support SmartCharging), the error is caught, the `'dispatchError'`
+   * event is emitted, and dispatching continues for all remaining sessions.
+   *
+   * Emits `'dispatched'` with all profiles when all dispatches complete.
+   *
+   * @returns The array of SessionProfiles that were dispatched.
+   */
+  async dispatch(): Promise<SessionProfile[]> {
+    const profiles = this.optimize();
+    if (profiles.length === 0) return profiles;
+
+    const dispatchResults = await Promise.allSettled(
+      profiles.map((profile) => {
+        const payload: DispatchPayload = {
+          clientId: profile.clientId,
+          transactionId: profile.transactionId,
+          connectorId: profile.connectorId,
+          sessionProfile: profile,
+        };
+        return this.dispatcher(payload);
+      }),
+    );
+
+    // Handle errors per session — do NOT throw
+    dispatchResults.forEach((result, i) => {
+      if (result.status === "rejected") {
+        const profile = profiles[i]!;
+        this.log(
+          `[${this.siteId}] Dispatcher error for client ${profile.clientId}: ${result.reason}`,
+        );
+        this.emit("dispatchError", {
+          clientId: profile.clientId,
+          transactionId: profile.transactionId,
+          error: result.reason,
+        });
+      }
+    });
+
+    this.emit("dispatched", profiles);
+    return profiles;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Runtime configuration
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Change the allocation strategy at runtime.
+   * Takes effect on the next `optimize()` / `dispatch()` call.
+   */
+  setAlgorithm(algorithm: Strategy, config?: SmartChargingEngineConfig): void {
+    this.algorithm = algorithm;
+    this.strategyFn = this.resolveStrategy(algorithm, config);
+    this.log(`[${this.siteId}] Algorithm changed to: ${algorithm}`);
+  }
+
+  /**
+   * Update the site's maximum grid power limit.
+   * Useful for dynamic grid constraints (e.g., utility demand response signals).
+   * Takes effect on the next `optimize()` / `dispatch()` call.
+   */
+  setGridLimit(maxGridPowerKw: number): void {
+    if (maxGridPowerKw <= 0) {
+      throw new SmartChargingConfigError(
+        `maxGridPowerKw must be > 0, got ${maxGridPowerKw}`,
+      );
+    }
+    this.gridLimitKw = maxGridPowerKw;
+    this.log(`[${this.siteId}] Grid limit updated to: ${maxGridPowerKw} kW`);
+  }
+
+  /**
+   * Update the safety margin percentage.
+   * Takes effect on the next `optimize()` / `dispatch()` call.
+   */
+  setSafetyMargin(pct: number): void {
+    if (pct < 0 || pct >= 100) {
+      throw new SmartChargingConfigError(
+        `safetyMarginPct must be between 0 and 99, got ${pct}`,
+      );
+    }
+    this.safetyMarginPct = pct;
+  }
+
+  /**
+   * Current configuration snapshot (read-only).
+   */
+  get config(): {
+    siteId: string;
+    gridLimitKw: number;
+    safetyMarginPct: number;
+    algorithm: Strategy;
+    phases: 1 | 3;
+    voltageV: number;
+    effectiveGridLimitKw: number;
+  } {
+    return {
+      siteId: this.siteId,
+      gridLimitKw: this.gridLimitKw,
+      safetyMarginPct: this.safetyMarginPct,
+      algorithm: this.algorithm,
+      phases: this.phases,
+      voltageV: this.voltageV,
+      effectiveGridLimitKw: this.gridLimitKw * (1 - this.safetyMarginPct / 100),
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Private helpers
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private resolveStrategy(
+    algorithm: Strategy,
+    config?: Partial<SmartChargingEngineConfig>,
+  ): StrategyFn {
+    switch (algorithm) {
+      case "EQUAL_SHARE":
+        return equalShareStrategy;
+      case "PRIORITY":
+        return priorityStrategy;
+      case "TIME_OF_USE": {
+        const windows = config?.timeOfUseWindows;
+        if (!windows || windows.length === 0) {
+          throw new SmartChargingConfigError(
+            'algorithm "TIME_OF_USE" requires at least one entry in timeOfUseWindows.',
+          );
+        }
+        return createTimeOfUseStrategy(windows);
+      }
+      default:
+        throw new SmartChargingConfigError(
+          `Unknown algorithm "${algorithm as string}". Valid: EQUAL_SHARE, PRIORITY, TIME_OF_USE`,
+        );
+    }
+  }
+
+  private log(msg: string): void {
+    if (this.debug) {
+      console.debug(msg);
+    }
+  }
+}
+
+export { SmartChargingEngine };
