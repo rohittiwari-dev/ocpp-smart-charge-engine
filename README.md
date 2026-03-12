@@ -30,6 +30,17 @@ It is **completely library-agnostic**. It does not care whether you use `ocpp-ws
 
 ---
 
+## Documentation
+
+| Guide | Description |
+|---|---|
+| [Grid & Load Management](./docs/grid-and-load-management.md) | Multi-panel sites, mixed fleets, hierarchical grid, OCPP profile types |
+| [ocpp-ws-io + Express Example](./docs/ocpp-ws-io-express-example.md) | Full CSMS integration — correct API usage, REST admin endpoints, auto-dispatch |
+| [Charging Strategies](./docs/strategies.md) | Equal Share, Priority, Time-of-Use, runtime swap, custom strategy |
+| [Database-Driven Config](./docs/database-driven-config.md) | Store panel/charger config in DB — engine registry, hot-reload, charger reassignment |
+
+---
+
 ## Install
 
 ```bash
